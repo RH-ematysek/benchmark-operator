@@ -1,0 +1,94 @@
+---
+- block:
+  - name: Get etcd pod list
+    kubernetes.core.k8s_info:
+      kind: Pod
+      namespace: openshift-etcd
+      label_selectors:
+        - app = etcd
+    register: pod_list
+
+  - name: Get single etcd pod
+    set_fact:
+      etcd_pod: "{{ pod_list.resources[0].metadata.name  }}"
+
+  - name: Download etcd tarball
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: wget -q -c https://github.com/etcd-io/etcd/tarball/release-3.5 -O /root/etcd.tgz
+    register: cmd_status
+
+  - name: Untar etcd.tgz
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: tar -C /root -xf /root/etcd.tgz
+    register: cmd_status
+
+  - name: rm etcd.tgz
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: rm /root/etcd.tgz
+    register: cmd_status
+
+  - name: Download golang.tgz
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: wget -q -c https://go.dev/dl/go1.18.1.linux-amd64.tar.gz -O /root/golang.tgz
+    register: cmd_status
+
+  - name: Untar golang.tgz
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: tar -C /usr/local -xf /root/golang.tgz
+    register: cmd_status
+
+  - name: rm golang.tgz
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: rm /root/golang.tgz
+    register: cmd_status
+
+  - name: mv golang binaries
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: mv /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/
+    register: cmd_status
+
+  - name: Copy run_test.sh
+    command: kubectl cp "{{ role_path }}/files/run_test.sh" "openshift-etcd/{{etcd_pod}}:/root/run_test.sh" -c etcd
+
+  - include_role:
+      name: benchmark_state
+      tasks_from: set_state
+    vars:
+      state: Running
+
+  - name: Run test
+    kubernetes.core.k8s_exec:
+      namespace: openshift-etcd
+      pod: "{{ etcd_pod }}"
+      container: etcd
+      command: bash /root/run_test.sh
+    register: cmd_status
+
+
+  when: benchmark_state.resources[0].status.state == "Building"
+
+- include_role:
+    name: benchmark_state
+    tasks_from: completed.yml
+  when: benchmark_state.resources[0].status.state == "Running"
